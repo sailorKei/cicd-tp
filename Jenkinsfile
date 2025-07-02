@@ -10,7 +10,7 @@ pipeline {
     stages {
         stage('Cloner le repo') {
             steps {
-                git 'https://github.com/sailorKei/cicd-tp'
+                git 'https://github.com/sailorKei/cicd-tp.git'
             }
         }
 
