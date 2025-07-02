@@ -1,45 +1,63 @@
 pipeline {
     agent any
 
+    tools {
+        maven 'maven3'
+        jdk 'jdk17'
+    }
+
     environment {
-        DOCKER_USER = credentials('DOCKER_USER')
-        DOCKER_PASS = credentials('DOCKER_PASS')
-        SONAR_TOKEN = credentials('SONAR_TOKEN')
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub')
+        SONAR_TOKEN = credentials('sonar-token')
+        NEXUS_CREDENTIALS = credentials('nexus-credentials')
     }
 
     stages {
-        stage('Cloner le repo') {
+        stage('Checkout') {
             steps {
                 git 'https://github.com/sailorKei/cicd-tp.git'
             }
         }
 
-        stage('Build & Test') {
+        stage('Build with Maven') {
             steps {
-                sh 'echo "Build et tests ici (ex: npm install && npm test)"'
+                sh 'mvn clean package -DskipTests'
             }
         }
 
-        stage('Analyse SonarQube') {
+        stage('Code Quality Analysis') {
             steps {
                 withSonarQubeEnv('SonarQube') {
-                    sh 'sonar-scanner -Dsonar.projectKey=tp-cicd -Dsonar.sources=. -Dsonar.login=$SONAR_TOKEN'
+                    sh 'mvn sonar:sonar -Dsonar.login=$SONAR_TOKEN'
                 }
             }
         }
 
-        stage('Build Docker image') {
+        stage('Docker Build & Push') {
             steps {
-                sh 'docker build -t keichan02/tp-cicd-app:latest .'
+                script {
+                    dockerImage = docker.build("keichan02/cicd-tp")
+                    docker.withRegistry('https://index.docker.io/v1/', 'dockerhub') {
+                        dockerImage.push("latest")
+                    }
+                }
             }
         }
 
-        stage('Push DockerHub') {
+        stage('Publish to Nexus') {
             steps {
-                sh '''
-                    echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                    docker push keichan02/tp-cicd-app:latest
-                '''
+                sh """
+                mvn deploy:deploy-file \
+                    -DgroupId=com.example \
+                    -DartifactId=cicd-tp \
+                    -Dversion=1.0 \
+                    -Dpackaging=jar \
+                    -Dfile=target/*.jar \
+                    -DrepositoryId=nexus \
+                    -Durl=http://<TON_IP_PUBLIC>:8081/repository/maven-releases/ \
+                    -Dusername=${NEXUS_CREDENTIALS_USR} \
+                    -Dpassword=${NEXUS_CREDENTIALS_PSW}
+                """
             }
         }
     }
