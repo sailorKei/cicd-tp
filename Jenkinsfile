@@ -2,33 +2,36 @@ pipeline {
     agent any
 
     tools {
-        maven 'maven3'
         jdk 'jdk17'
+        maven 'maven3'
     }
 
     environment {
-        DOCKERHUB_CREDENTIALS = credentials('dockerhub')
+        DOCKER_CRED = 'dockerhub'
         SONAR_TOKEN = credentials('sonar-token')
-        NEXUS_CREDENTIALS = credentials('nexus-credentials')
+        SONAR_URL = 'http://13.61.190.120:9000'
+        NEXUS_URL = 'http://13.61.190.120:8081/repository/maven-snapshots/'
     }
 
     stages {
         stage('Checkout') {
             steps {
-                git 'https://github.com/sailorKei/cicd-tp.git'
+                checkout scm
             }
         }
 
-        stage('Build with Maven') {
+        stage('Build & Test') {
             steps {
-                sh 'mvn clean package -DskipTests'
+                sh 'mvn clean package -B'
             }
         }
 
-        stage('Code Quality Analysis') {
+        stage('SonarQube Analysis') {
             steps {
-                withSonarQubeEnv('SonarQube') {
-                    sh 'mvn sonar:sonar -Dsonar.login=$SONAR_TOKEN'
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    withSonarQubeEnv('MySonar') {
+                        sh "mvn sonar:sonar -Dsonar.host.url=${SONAR_URL} -Dsonar.login=${SONAR_TOKEN}"
+                    }
                 }
             }
         }
@@ -36,28 +39,22 @@ pipeline {
         stage('Docker Build & Push') {
             steps {
                 script {
-                    dockerImage = docker.build("keichan02/cicd-tp")
-                    docker.withRegistry('https://index.docker.io/v1/', 'dockerhub') {
-                        dockerImage.push("latest")
+                    def imageName = "keichan02/cicd-tp"
+                    sh "docker build -t ${imageName} ."
+                    withCredentials([usernamePassword(credentialsId: "${DOCKER_CRED}", passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
+                        sh "echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin"
+                        sh "docker push ${imageName}"
                     }
                 }
             }
         }
 
-        stage('Publish to Nexus') {
+        stage('Deploy to Nexus') {
             steps {
-                sh """
-                mvn deploy:deploy-file \
-                    -DgroupId=com.example \
-                    -DartifactId=cicd-tp \
-                    -Dversion=1.0 \
-                    -Dpackaging=jar \
-                    -Dfile=target/*.jar \
-                    -DrepositoryId=nexus \
-                    -Durl=http://<TON_IP_PUBLIC>:8081/repository/maven-releases/ \
-                    -Dusername=${NEXUS_CREDENTIALS_USR} \
-                    -Dpassword=${NEXUS_CREDENTIALS_PSW}
-                """
+                withCredentials([usernamePassword(credentialsId: 'nexus-credentials', passwordVariable: 'NEXUS_PASS', usernameVariable: 'NEXUS_USER')]) {
+                    sh 'mvn deploy -DaltDeploymentRepository=nexus::default::' +
+                       "${NEXUS_URL} -Dnexus.user=${NEXUS_USER} -Dnexus.password=${NEXUS_PASS}"
+                }
             }
         }
     }
